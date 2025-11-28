@@ -6,6 +6,8 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #define MAX_LINE 1024
 #define MAX_ARGS 64
@@ -142,6 +144,106 @@ static void exec_pipe(char *tokens[], int start, int mid, int end, int bg) {
     }
 }
 
+void builtin_pwd() {
+    char buf[1024];
+    if (getcwd(buf, sizeof(buf)))
+        printf("%s\n", buf);
+}
+
+void builtin_cd(char *path) {
+    if (!path) { printf("cd: path required\n"); return; }
+    if (chdir(path) < 0)
+        perror("cd");
+}
+
+void builtin_ls(const char *path)
+{
+    if (!path) path = ".";
+
+    DIR *dir = opendir(path);
+    if (!dir) {
+        perror("ls");
+        return;
+    }
+
+    struct dirent *ent;
+    char *names[1024];   // 파일 이름 저장
+    int count = 0;
+
+    // 1) 파일 목록 읽기 (숨김 파일 제외)
+    while ((ent = readdir(dir)) != NULL) {
+        // .으로 시작하는 숨김 파일 제외
+        if (ent->d_name[0] == '.') continue;
+
+        // 일반 파일만 출력 (DT_REG 또는 stat)
+        char fullpath[1024];
+        struct stat st;
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", path, ent->d_name);
+        if (stat(fullpath, &st) == 0 && S_ISREG(st.st_mode)) {
+            names[count++] = strdup(ent->d_name);
+        }
+    }
+    closedir(dir);
+
+    // 2) 알파벳 순 정렬
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (strcmp(names[i], names[j]) > 0) {
+                char *tmp = names[i];
+                names[i] = names[j];
+                names[j] = tmp;
+            }
+        }
+    }
+
+    // 3) 출력
+    int maxlen = 0;
+    for (int i = 0; i < count; i++) {
+        int len = strlen(names[i]);
+        if (len > maxlen) maxlen = len;
+    }
+    int cols = 120 / (maxlen + 2);
+    if (cols < 1) cols = 1;
+
+    for (int i = 0; i < count; i++) {
+        printf("%-*s", maxlen + 2, names[i]);
+        if ((i + 1) % cols == 0) printf("\n");
+        free(names[i]); // strdup 해제
+    }
+    printf("\n");
+}
+
+
+void builtin_mkdir(char *path) {
+    if (!path) { printf("mkdir: dir required\n"); return; }
+    if (mkdir(path, 0755) < 0)
+        perror("mkdir");
+}
+
+void builtin_rmdir(char *path) {
+    if (!path) { printf("rmdir: dir required\n"); return; }
+    if (rmdir(path) < 0)
+        perror("rmdir");
+}
+
+void builtin_rm(char *path) {
+    if (!path) { printf("rm: file required\n"); return; }
+    if (unlink(path) < 0)
+        perror("rm");
+}
+
+void builtin_cat(char *file) {
+    if (!file) { printf("cat: file required\n"); return; }
+
+    FILE *fp = fopen(file, "r");
+    if (!fp) { perror("cat"); return; }
+
+    int c;
+    while ((c = fgetc(fp)) != EOF)
+        putchar(c);
+    fclose(fp);
+}
+
 int main() {
     char line[MAX_LINE];
     char *tok[MAX_ARGS];
@@ -160,6 +262,41 @@ int main() {
         if (nt == 0) continue;
 
         if (!strcmp(tok[0], "exit")) break;
+
+        if (!strcmp(tok[0], "pwd")) {
+            builtin_pwd();
+            continue;
+        }
+
+        if (!strcmp(tok[0], "cd")) {
+            builtin_cd(tok[1]);
+            continue;
+        }
+        
+        if (!strcmp(tok[0], "ls")) {
+            builtin_ls(tok[1]);
+            continue;
+        }
+        
+        if (!strcmp(tok[0], "mkdir")) {
+            builtin_mkdir(tok[1]);
+            continue;
+        }
+        
+        if (!strcmp(tok[0], "rmdir")) {
+            builtin_rmdir(tok[1]);
+            continue;
+        }
+        
+        if (!strcmp(tok[0], "rm")) {
+            builtin_rm(tok[1]);
+            continue;
+        }
+        
+        if (!strcmp(tok[0], "cat")) {
+            builtin_cat(tok[1]);
+            continue;
+        }
 
         int bg = 0;
         if (!strcmp(tok[nt-1], "&")) {
